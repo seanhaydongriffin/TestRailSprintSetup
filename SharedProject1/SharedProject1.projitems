@@ -25,6 +25,8 @@
     <Compile Include="$(MSBuildThisFileDirectory)Models\JiraIssue.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Models\TestRailCase.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Models\TestRailCaseSteps.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\TestRailMilestone3.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\TestRailMilestone4.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Models\TestRailMilestone2.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Models\TestRailMilestone.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Models\TestRailPlan3.cs" />

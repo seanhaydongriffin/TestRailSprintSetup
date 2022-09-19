@@ -6,7 +6,7 @@ namespace SharedProject
     public static class DateTime
     {
 
-        public static (int LongYear, int ShortYear, int Quarter) GetNowQuarterInfo()
+        public static (int LongYear, int ShortYear, int Quarter) GetNowQuarterInfo(int quarter_number = 0)
         {
             var now = System.DateTime.Now;
             var year = now.Month > 6 ? now.Year + 1 : now.Year;
@@ -18,6 +18,10 @@ namespace SharedProject
                 quarter = 2;
             else if (now.Month >= 1 && now.Month <= 3)
                 quarter = 3;
+
+            if (quarter_number > 0)
+
+                quarter = quarter_number;
 
             return (year, year % 100, quarter);
         }
