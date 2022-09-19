@@ -11,6 +11,7 @@ namespace SharedProject.Models
         public long due_on { get; set; }
         public long parent_id { get; set; }
         public long start_on { get; set; }
+        public long started_on { get; set; }
 
     }
 }

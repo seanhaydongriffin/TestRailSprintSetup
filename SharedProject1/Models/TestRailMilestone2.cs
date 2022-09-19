@@ -10,6 +10,8 @@ namespace SharedProject.Models
         public string description { get; set; }
         public long due_on { get; set; }
         public long start_on { get; set; }
+        public bool is_started { get; set; }
+        public bool is_completed { get; set; }
 
     }
 }
