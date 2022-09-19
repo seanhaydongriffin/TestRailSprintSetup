@@ -30,8 +30,19 @@ namespace TestRailSprintSetup
             Log.WriteLine("today = " + today);
             Log.WriteLine("unixTimestamp = " + unixTimestamp);
 
-            var current_quarter = SharedProject.DateTime.GetNowQuarterInfo();
-            Log.WriteLine("Current quarter is FY" + current_quarter.ShortYear + "Q" + current_quarter.Quarter);
+            var Sprint = Sprints.Cast<XmlNode>().Where(n => System.DateTime.ParseExact(n.Attributes["Start"].InnerText, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture) <= today && System.DateTime.ParseExact(n.Attributes["End"].InnerText, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture) >= today).First();
+            var sprint_name = Sprint.Attributes["Name"].InnerText;
+            var sprint_start_datetime = System.DateTime.ParseExact(Sprint.Attributes["Start"].InnerText, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture);
+            var sprint_end_datetime = System.DateTime.ParseExact(Sprint.Attributes["End"].InnerText, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture);
+
+            var quarter_name = sprint_name.Substring(0, sprint_name.IndexOf("S"));
+            var FirstSprintInQuarter = Sprints.Cast<XmlNode>().Where(n => n.Attributes["Name"].InnerText.StartsWith(quarter_name)).First();
+            var first_sprint_start_datetime = System.DateTime.ParseExact(FirstSprintInQuarter.Attributes["Start"].InnerText, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture);
+            var LastSprintInQuarter = Sprints.Cast<XmlNode>().Where(n => n.Attributes["Name"].InnerText.StartsWith(quarter_name)).Last();
+            var last_sprint_end_datetime = System.DateTime.ParseExact(LastSprintInQuarter.Attributes["End"].InnerText, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture);
+            var quarter_start_month = first_sprint_start_datetime.ToString("MMM");
+
+            Log.WriteLine("Current sprint quarter is " + quarter_name + " starting " + FirstSprintInQuarter.Attributes["Start"].InnerText + " and ending " + LastSprintInQuarter.Attributes["End"].InnerText);
 
             // The projects
 
@@ -43,7 +54,7 @@ namespace TestRailSprintSetup
                 // The milestones
 
                 var milestones = (JObject)TestRailClient.SendGet("get_milestones/" + TestProjectId);
-                var quarter_milestone = milestones.SelectToken("$..[?(@.name =~ /^FY" + current_quarter.ShortYear + "Q" + current_quarter.Quarter + " .*$/)]");
+                var quarter_milestone = milestones.SelectToken("$..[?(@.name =~ /^" + quarter_name + " .*$/)]");
 
                 if (quarter_milestone == null)
                 {
@@ -52,90 +63,60 @@ namespace TestRailSprintSetup
                     // create the quarter milestone
 
                     var tr_milestone = new TestRailMilestone2();
-                    var current_quarter_start_datetime = new System.DateTime(current_quarter.LongYear, 1, 1);
-                    var current_quarter_end_datetime = new System.DateTime(current_quarter.LongYear, 1, System.DateTime.DaysInMonth(current_quarter.LongYear, 1));
-                    var current_quarter_end_month = "";
-
-                    if (current_quarter.Quarter == 1)
-                    {
-                        current_quarter_start_datetime = new System.DateTime(current_quarter.LongYear, 7, 1);
-                        current_quarter_end_datetime = new System.DateTime(current_quarter.LongYear, 9, System.DateTime.DaysInMonth(current_quarter.LongYear, 9));
-                        current_quarter_end_month = "Sep";
-                    }
-
-                    if (current_quarter.Quarter == 2)
-                    {
-                        current_quarter_start_datetime = new System.DateTime(current_quarter.LongYear, 10, 1);
-                        current_quarter_end_datetime = new System.DateTime(current_quarter.LongYear, 12, System.DateTime.DaysInMonth(current_quarter.LongYear, 12));
-                        current_quarter_end_month = "Dec";
-                    }
-
-                    if (current_quarter.Quarter == 3)
-                    {
-                        current_quarter_start_datetime = new System.DateTime(current_quarter.LongYear, 1, 1);
-                        current_quarter_end_datetime = new System.DateTime(current_quarter.LongYear, 3, System.DateTime.DaysInMonth(current_quarter.LongYear, 3));
-                        current_quarter_end_month = "Mar";
-                    }
-
-                    if (current_quarter.Quarter == 4)
-                    {
-                        current_quarter_start_datetime = new System.DateTime(current_quarter.LongYear, 4, 1);
-                        current_quarter_end_datetime = new System.DateTime(current_quarter.LongYear, 6, System.DateTime.DaysInMonth(current_quarter.LongYear, 6));
-                        current_quarter_end_month = "Jun";
-                    }
-
-                    tr_milestone.name = "FY" + current_quarter.ShortYear + "Q" + current_quarter.Quarter + " (ends " + current_quarter_end_month + ")";
+                    tr_milestone.name = quarter_name + " (starts " + quarter_start_month + ")";
                     tr_milestone.description = "";
-                    tr_milestone.start_on = (int)current_quarter_start_datetime.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
-                    tr_milestone.due_on = (int)current_quarter_end_datetime.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
+                    tr_milestone.start_on = (int)first_sprint_start_datetime.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
+                    tr_milestone.due_on = (int)last_sprint_end_datetime.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
+                    tr_milestone.is_started = true;
+                    tr_milestone.is_completed = false;
 
                     Log.WriteLine("Posting new quarter milestone to endpoint \"add_milestone/" + TestProjectId + "\" the data ... " + tr_milestone);
                     quarter_milestone = (JToken)TestRailClient.SendPost("add_milestone/" + TestProjectId, tr_milestone);
 
+                    // Start the milestone
+
+                    var tr_milestone3 = new TestRailMilestone3();
+                    tr_milestone3.is_started = true;
+                    quarter_milestone = (JToken)TestRailClient.SendPost("update_milestone/" + quarter_milestone["id"], tr_milestone3);
                 }
 
                 var sprint_milestones = quarter_milestone["milestones"];
-//                    Log.WriteLine("sprint_milestones = " + sprint_milestones);
+                //                    Log.WriteLine("sprint_milestones = " + sprint_milestones);
 
-                var sprint_milestone = sprint_milestones.SelectToken("$..[?(@.start_on <= " + unixTimestamp + " && @.due_on >= " + unixTimestamp + ")]");
-//                    Log.WriteLine("sprint_milestone = " + sprint_milestone);
+                JToken sprint_milestone = null;
+
+                // Look for a sprint milestone that is active
+
+                sprint_milestone = sprint_milestones.SelectToken("$..[?(@.started_on <= " + (System.DateTime.UtcNow.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds + 3600) + " && @.due_on >= " + System.DateTime.UtcNow.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds + ")]");
+
+                if (sprint_milestone == null)
+
+                    // Look for a sprint milestone that is not active
+
+                    sprint_milestone = sprint_milestones.SelectToken("$..[?(@.start_on <= " + unixTimestamp + " && @.due_on >= " + unixTimestamp + ")]");
+
+                //                    Log.WriteLine("sprint_milestone = " + sprint_milestone);
 
                 if (sprint_milestone == null)
                 {
                     Log.WriteLine("Not Found sprint milestone for this current sprint \"" + sprint_milestone + "\".  Will create one.");
 
-                    // locate the new milestone from the sprint dates in the config
+                    var tr_milestone = new TestRailMilestone();
+                    tr_milestone.name = sprint_name + " (starts " + sprint_start_datetime.ToString("dd MMM") + ")";
+                    tr_milestone.description = "";
+                    tr_milestone.parent_id = (long)quarter_milestone["id"];
+                    tr_milestone.start_on = (int)sprint_start_datetime.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
+                    tr_milestone.started_on = (int)sprint_start_datetime.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
+                    tr_milestone.due_on = (int)sprint_end_datetime.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
 
-                    for (int sprint_num = 1; sprint_num <= 50; sprint_num++)
-                    {
-                        var Sprint = Sprints.Cast<XmlNode>().Where(n => n.Attributes["Name"].InnerText == "FY" + current_quarter.ShortYear + "Q" + current_quarter.Quarter + "S" + sprint_num).First();
+                    Log.WriteLine("Posting new sprint milestone to endpoint \"add_milestone/" + TestProjectId + "\" the data ... " + tr_milestone);
+                    sprint_milestone = (JToken)TestRailClient.SendPost("add_milestone/" + TestProjectId, tr_milestone);
+                    
+                    // Start the milestone
 
-                        if (Sprint == null)
-
-                            break;
-
-                        var SprintName = Sprint.GetAttributeValue("Name");
-                        var SprintStart = Sprint.GetAttributeValue("Start");
-                        var SprintEnd = Sprint.GetAttributeValue("End");
-                        var sprint_start = System.DateTime.ParseExact(SprintStart, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture);
-                        var sprint_end = System.DateTime.ParseExact(SprintEnd, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture);
-
-                        if (today.Ticks >= sprint_start.Ticks && today.Ticks <= sprint_end.Ticks)
-                        {
-                            // create the milestone
-
-                            var tr_milestone = new TestRailMilestone();
-                            tr_milestone.name = "FY" + current_quarter.ShortYear + "Q" + current_quarter.Quarter + "S" + sprint_num + " (ends " + sprint_end.ToString("dd MMM") + ")";
-                            tr_milestone.description = "";
-                            tr_milestone.parent_id = (long)quarter_milestone["id"];
-                            tr_milestone.start_on = (int)sprint_start.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
-                            tr_milestone.due_on = (int)sprint_end.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
-
-                            Log.WriteLine("Posting new sprint milestone to endpoint \"add_milestone/" + TestProjectId + "\" the data ... " + tr_milestone);
-                            sprint_milestone = (JToken)TestRailClient.SendPost("add_milestone/" + TestProjectId, tr_milestone);
-                            break;
-                        }
-                    }
+                    var tr_milestone3 = new TestRailMilestone3();
+                    tr_milestone3.is_started = true;
+                    sprint_milestone = (JToken)TestRailClient.SendPost("update_milestone/" + sprint_milestone["id"], tr_milestone3);
                 }
 
                 var plans = (JObject)TestRailClient.SendGet("get_plans/" + TestProjectId + "&is_completed=0&milestone_id=" + sprint_milestone["id"]);
