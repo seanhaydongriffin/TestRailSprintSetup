@@ -1,124 +1,88 @@
-﻿using Newtonsoft.Json.Linq;
+﻿using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using SharedProject;
-using SharedProject.Confluence;
+using SharedProject.Models;
 using System;
-using System.Collections.Generic;
-using System.Data;
 using System.Linq;
 using System.Reflection;
-using System.Text.RegularExpressions;
 using System.Xml;
 
-namespace TestRailSprintReporting
+namespace TestRailSprintSetup
 {
     class Program
     {
-        private static SharedProject.TestRail.APIClient TestRailAPIClient = null;
-        private static SharedProject.TestRail.WebClient TestRailWebClient = null;
-        private const string ISO8601WithZuluDateTimeFormat = "yyyy-MM-ddTHH:mm:ssZ";
+        private static SharedProject.TestRail.APIClient TestRailClient = null;
 
         static void Main(string[] args)
         {
-            Log.Initialise(System.IO.Path.GetDirectoryName(Assembly.GetEntryAssembly().Location) + "\\TestRailSprintReporting.log");
+            Log.Initialise(System.IO.Path.GetDirectoryName(Assembly.GetEntryAssembly().Location) + "\\TestRailSprintSetup.log");
             Log.Initialise(null);
             AppConfig.Open();
 
-            TestRailAPIClient = new SharedProject.TestRail.APIClient(AppConfig.Get("TestRailUrl"));
-            TestRailAPIClient.User = AppConfig.Get("TestRailUser");
-            TestRailAPIClient.Password = AppConfig.Get("TestRailPassword");
+            TestRailClient = new SharedProject.TestRail.APIClient(AppConfig.Get("TestRailUrl"));
+            TestRailClient.User = AppConfig.Get("TestRailUser");
+            TestRailClient.Password = AppConfig.Get("TestRailPassword");
 
-            TestRailWebClient = new SharedProject.TestRail.WebClient(AppConfig.Get("TestRailUrl"));
-            TestRailWebClient.User = AppConfig.Get("TestRailUser");
-            TestRailWebClient.Password = AppConfig.Get("TestRailPassword");
-            
-            Log.WriteLine("TestRail login ...");
-            TestRailWebClient.Login();
+            var Sprints = AppConfig.GetSectionGroup("Sprints").GetSection();
 
             var today = System.DateTime.Today;
             var unixTimestamp = (int)today.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
             Log.WriteLine("today = " + today);
             Log.WriteLine("unixTimestamp = " + unixTimestamp);
 
-            // test statuses
+            var Sprint = Sprints.Cast<XmlNode>().Where(n => System.DateTime.ParseExact(n.Attributes["Start"].InnerText, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture) <= today && System.DateTime.ParseExact(n.Attributes["End"].InnerText, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture) >= today).First();
+            var sprint_name = Sprint.Attributes["Name"].InnerText;
+            var sprint_start_datetime = System.DateTime.ParseExact(Sprint.Attributes["Start"].InnerText, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture);
+            var sprint_end_datetime = System.DateTime.ParseExact(Sprint.Attributes["End"].InnerText, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture);
 
-            //var test_statuses = (JArray)TestRailAPIClient.SendGet("get_statuses");
+            var quarter_name = sprint_name.Substring(0, sprint_name.IndexOf("S"));
+            var FirstSprintInQuarter = Sprints.Cast<XmlNode>().Where(n => n.Attributes["Name"].InnerText.StartsWith(quarter_name)).First();
+            var first_sprint_start_datetime = System.DateTime.ParseExact(FirstSprintInQuarter.Attributes["Start"].InnerText, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture);
+            var LastSprintInQuarter = Sprints.Cast<XmlNode>().Where(n => n.Attributes["Name"].InnerText.StartsWith(quarter_name)).Last();
+            var last_sprint_end_datetime = System.DateTime.ParseExact(LastSprintInQuarter.Attributes["End"].InnerText, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture);
+            var quarter_start_month = first_sprint_start_datetime.ToString("MMM");
 
-            SharedProject.Confluence.APIClient ConfluenceClient = new SharedProject.Confluence.APIClient(AppConfig.Get("ConfluenceUrl"));
-            ConfluenceClient.User = AppConfig.Get("ConfluenceUser");
-            ConfluenceClient.Password = AppConfig.Get("ConfluenceApiToken");
-
-            //            var debug = (JObject)ConfluenceClient.SendGet(AppConfig.Get("ConfluencePageKey") + "?expand=body.storage");
-            //var debug = (JObject)ConfluenceClient.SendGet("2196242885?expand=body.storage");
-            //var debug = (JObject)ConfluenceClient.SendGet("2188705921?expand=body.storage");
-            //var debug = (JObject)ConfluenceClient.SendGet("997687643/child/page?limit=200");
-            //Log.WriteLine(debug.ToString());
-
-            var want_to_know_more = (new CustomPanel(":thinking:", "1f914", "#DEEBFF", "Want to know more? ", "Click here for regression test suite details", "https://janisoncls.atlassian.net/wiki/display/JAST/QA+Assessment+Regression+Test+Suites")).ToStringDisableFormatting();
-
-            var current_sprint_name = "";
-            System.DateTime current_sprint_start = new System.DateTime();
-            System.DateTime current_sprint_end = new System.DateTime();
-            var confluence_page_table = new Dictionary<string, DataTable>();
-            var testrail_plan_type_status_count = new Dictionary<string, int?>();
-            var testrail_project_id = new Dictionary<string, string>();
-            var testrail_plan_id = new Dictionary<string, string>();
-            var testrail_run_id = new Dictionary<string, string>();
-
-            var daily_untested_count = new Dictionary<string, int?>();
-            var daily_failed_count = new Dictionary<string, int?>();
+            Log.WriteLine("Current sprint quarter is " + quarter_name + " starting " + FirstSprintInQuarter.Attributes["Start"].InnerText + " and ending " + LastSprintInQuarter.Attributes["End"].InnerText);
 
             // The projects
 
-            var project_num = 0;
-
-            foreach (XmlNode TestProject in AppConfig.GetSectionGroup("TestProjects").GetSectionGroups())
+            foreach (XmlNode TestProject in AppConfig.GetSectionGroup("TestRuns").GetSectionGroups())
             {
-                project_num++;
-                var TestProjectName = TestProject.GetAttributeValue("Name");
-                var TestProjectId = TestProject.GetAttributeValue("Id");
-                testrail_project_id.put(TestProjectName.ToString().Replace(" Assessment", "").Trim(), TestProjectId);
-                var TestProjectConfluenceRootKey = TestProject.GetAttributeValue("ConfluenceSpace") + "-" + TestProject.GetAttributeValue("ConfluencePage") + "-" + TestProject.GetAttributeValue("Team");
+                var TestProjectId = TestProject.FirstChild.GetAttributeValue("Id");
+                Log.WriteLine("TestProjectId = " + TestProjectId);
 
-                if (!confluence_page_table.ContainsKey(TestProjectConfluenceRootKey))
+                // The milestones
+
+                var milestones = (JObject)TestRailClient.SendGet("get_milestones/" + TestProjectId);
+                var quarter_milestone = milestones.SelectToken("$..[?(@.name =~ /^" + quarter_name + " .*$/)]");
+
+                if (quarter_milestone == null)
                 {
-                    var results_table = new DataTable();
-                    results_table.Columns.Add("TestProject", typeof(string));
-                    results_table.Columns.Add("TestPlan", typeof(string));
-                    results_table.Columns.Add("TestRun", typeof(string));
-                    results_table.Columns.Add("TestAutoID", typeof(int));
-                    results_table.Columns.Add("TestAutoName", typeof(string));
-                    results_table.Columns.Add("TestTitle", typeof(string));
-                    results_table.Columns.Add("TestStatus", typeof(string));
-                    results_table.Columns.Add("TestTestedOn", typeof(string));
-                    results_table.Columns.Add("TestAllDefects", typeof(string));
-                    confluence_page_table.Add(TestProjectConfluenceRootKey, results_table);
+                    Log.WriteLine("Not Found quarter milestone for this current quarter \"" + quarter_milestone + "\".  Will create one.");
+
+                    // create the quarter milestone
+
+                    var tr_milestone = new TestRailMilestone2();
+                    tr_milestone.name = quarter_name + " (starts " + quarter_start_month + ")";
+                    tr_milestone.description = "";
+                    tr_milestone.start_on = (int)first_sprint_start_datetime.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
+                    tr_milestone.due_on = (int)last_sprint_end_datetime.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
+                    tr_milestone.is_started = true;
+                    tr_milestone.is_completed = false;
+
+                    Log.WriteLine("Posting new quarter milestone to endpoint \"add_milestone/" + TestProjectId + "\" the data ... " + tr_milestone);
+                    quarter_milestone = (JToken)TestRailClient.SendPost("add_milestone/" + TestProjectId, tr_milestone);
+
+                    // Start the milestone
+
+                    var tr_milestone3 = new TestRailMilestone3();
+                    tr_milestone3.is_started = true;
+                    quarter_milestone = (JToken)TestRailClient.SendPost("update_milestone/" + quarter_milestone["id"], tr_milestone3);
                 }
 
-                // The quarter milestone
-
-                Log.WriteLine("Prj " + project_num + " of " + AppConfig.GetSectionGroup("TestProjects").GetSectionGroups().Count + " \"" + TestProjectName + "\" getting the milestones ...");
-                var milestones = (JObject)TestRailAPIClient.SendGet("get_milestones/" + TestProjectId);
-
-                JToken quarter_milestone = null;
-
-                // Look for a quarter milestone that is active
-
-                //var debug = milestones.SelectTokens("$..[?(@.parent_id == null && @.started_on <= " + (System.DateTime.UtcNow.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds + 3600) + " && @.due_on >= " + System.DateTime.UtcNow.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds + ")]");
-                quarter_milestone = milestones.SelectToken("$..[?(@.parent_id == null && @.started_on <= " + (System.DateTime.UtcNow.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds + 3600) + " && @.due_on >= " + System.DateTime.UtcNow.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds + ")]");
-
-                if (quarter_milestone == null)
-
-                    // Look for a quarter milestone that is not active
-
-                    quarter_milestone = milestones.SelectToken("$..[?(@.parent_id == null && @.start_on <= " + unixTimestamp + " && @.due_on >= " + unixTimestamp + ")]");
-
-                if (quarter_milestone == null)
-
-                    Environment.Exit(0);
-
-                // the sprint milestone
-
                 var sprint_milestones = quarter_milestone["milestones"];
+                //                    Log.WriteLine("sprint_milestones = " + sprint_milestones);
+
                 JToken sprint_milestone = null;
 
                 // Look for a sprint milestone that is active
@@ -131,434 +95,151 @@ namespace TestRailSprintReporting
 
                     sprint_milestone = sprint_milestones.SelectToken("$..[?(@.parent_id != null && @.start_on <= " + unixTimestamp + " && @.due_on >= " + unixTimestamp + ")]");
 
+                //                    Log.WriteLine("sprint_milestone = " + sprint_milestone);
+
                 if (sprint_milestone == null)
-
-                    Environment.Exit(0);
-
-                current_sprint_name = sprint_milestone["name"].ToString().Split(' ').FirstOrDefault();
-
-                if (sprint_milestone["started_on"] != null)
-
-                    current_sprint_start = SharedProject.DateTime.UnixTimeStampToUTCDateTime(Convert.ToDouble(sprint_milestone["started_on"]));
-                else
-
-                    current_sprint_start = SharedProject.DateTime.UnixTimeStampToUTCDateTime(Convert.ToDouble(sprint_milestone["start_on"]));
-
-                current_sprint_end = SharedProject.DateTime.UnixTimeStampToUTCDateTime(Convert.ToDouble(sprint_milestone["due_on"]));
-                var current_sprint_milestone_id = sprint_milestone["id"].ToString();
-
-                Log.WriteLine("Prj " + project_num + " of " + AppConfig.GetSectionGroup("TestProjects").GetSectionGroups().Count + " Milestone \"" + sprint_milestone["name"] + "\" getting the artifacts ...");
-
-                var xml = TestRailWebClient.SendGet("milestones/export/" + current_sprint_milestone_id);
-
-                //SharedProject.File.overwrite("C:\\dwn\\fred.xml", xml);
-                //var xml = SharedProject.File.read("C:\\dwn\\fred.xml");
-
-                var plans = Xml.GetChildNodes(xml, "milestone/runs/plan");
-
-                foreach (XmlNode plan in plans)
                 {
-                    var plan_id = plan.GetChildNode("id").InnerText;
-                    var plan_name = plan.GetChildNode("name").InnerText.Replace(current_sprint_name, "").Trim();
-                    testrail_plan_id.put(plan_name, plan_id.Replace("R", ""));
-                    var runs = plan.GetChildNodes("runs/run");
+                    Log.WriteLine("Not Found sprint milestone for this current sprint \"" + sprint_milestone + "\".  Will create one.");
 
-                    foreach (XmlNode run in runs)
+                    var tr_milestone = new TestRailMilestone();
+                    tr_milestone.name = sprint_name + " (starts " + sprint_start_datetime.ToString("dd MMM") + ")";
+                    tr_milestone.description = "";
+                    tr_milestone.parent_id = (long)quarter_milestone["id"];
+                    tr_milestone.start_on = (int)sprint_start_datetime.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
+                    tr_milestone.started_on = (int)sprint_start_datetime.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
+                    tr_milestone.due_on = (int)sprint_end_datetime.Subtract(new System.DateTime(1970, 1, 1)).TotalSeconds;
+
+                    Log.WriteLine("Posting new sprint milestone to endpoint \"add_milestone/" + TestProjectId + "\" the data ... " + tr_milestone);
+                    sprint_milestone = (JToken)TestRailClient.SendPost("add_milestone/" + TestProjectId, tr_milestone);
+                    
+                    // Start the milestone
+
+                    var tr_milestone3 = new TestRailMilestone3();
+                    tr_milestone3.is_started = true;
+                    sprint_milestone = (JToken)TestRailClient.SendPost("update_milestone/" + sprint_milestone["id"], tr_milestone3);
+                }
+
+                var plans = (JObject)TestRailClient.SendGet("get_plans/" + TestProjectId + "&is_completed=0&milestone_id=" + sprint_milestone["id"]);
+
+                // The test plans
+
+                foreach (XmlNode TestPlan in TestProject.SelectNodes("*[starts-with(name(), 'TestPlan_')]"))
+                {
+                    var TestPlanNameSuffix = TestPlan.FirstChild.GetAttributeValue("NameSuffix");
+                    var plan_name = sprint_milestone["name"].ToString().Split(' ').FirstOrDefault() + " " + TestPlanNameSuffix;
+                    var plan_id = plans.SelectToken("$..[?(@.name == '" + plan_name + "')].id");
+
+                    // if the test plan is not in TestRail
+
+                    if (plan_id == null)
                     {
-                        var run_id = run.GetChildNode("id").InnerText;
-                        var run_name = run.GetChildNode("name").InnerText;
-                        testrail_run_id.put(run_name.ToString().Replace(" Functional", "").Replace(" Regression", "").Trim(), run_id.Replace("R", ""));
-                        var tests = run.GetChildNodes("sections/section/tests/test");
+                        Log.WriteLine("Not Found Project \"" + TestProjectId + "\", Milestone \"" + sprint_milestone["name"] + "\" and plan with name \"" + plan_name + "\".");
+                        Log.WriteLine("Creating this plan...");
 
-                        foreach (XmlNode test in tests)
+                        var CopyFromNameSuffix = TestPlan.FirstChild.GetAttributeValue("CopyFromNameSuffix");
+                        XmlNode CopyFromTestPlan = null;
+
+                        if (CopyFromNameSuffix == null)
+
+                            CreateTestRailPlan(TestProjectId, plan_name, (long)sprint_milestone["id"], TestPlan);
+                        else
                         {
-                            var testcaseid = test.GetChildNode("caseid").InnerText;
-                            var testtitle = test.GetChildNode("title").InnerText;
-                            var teststatus = test.GetChildNode("status").InnerText;
-                            var testcustom = test.GetChildNode("custom");
-                            var auto_script_ref = testcustom.GetChildNode("auto_script_ref").InnerText;
-                            var tested_on = "";
-                            var all_defects = "";
-                            var test_date_outcome = new Dictionary<string, string>();
-
-                            var testchanges = test.GetChildNodes("changes/change");
-
-                            foreach (XmlNode testchange in testchanges)
-                            {
-                                var created_on = testchange.GetChildNode("createdon").InnerText;
-                                System.DateTime created_on_datetime = System.DateTime.ParseExact(created_on, ISO8601WithZuluDateTimeFormat, System.Globalization.CultureInfo.InvariantCulture);
-
-                                if (tested_on.Equals(""))
-                                {
-                                    tested_on = created_on_datetime.ToString("dd MMM HH:mm");
-                                }
-
-                                var status = test.GetChildNode("status").InnerText;
-                                var defects = testchange.GetChildNode("defects").InnerText;
-
-                                if (defects.Length > 0)
-                                {
-                                    if (all_defects.Length > 0)
-
-                                        all_defects += ", ";
-
-                                    all_defects += defects;
-                                }
-
-                                var result_created_on = created_on_datetime.ToString("ddd, dd/MM");
-
-                                if (!test_date_outcome.ContainsKey(result_created_on))
-
-                                    test_date_outcome.put(result_created_on, status);
-                            }
-
-                            // Examine every day of the sprint for the test and increment the daily totals accordingly
-
-                            var prev_day_result = "Untested";
-
-                            for (var day = current_sprint_start; day.Date <= current_sprint_end; day = day.AddDays(1))
-                            {
-                                var day_str = day.ToString("ddd, dd/MM");
-
-                                if (!test_date_outcome.ContainsKey(day_str))
-
-                                    test_date_outcome.put(day_str, prev_day_result);
-
-                                if (test_date_outcome.get(day_str).Equals("Untested"))
-
-                                    daily_untested_count.Increment(plan_name + "~" + day_str);
-
-                                if (test_date_outcome.get(day_str).Equals("Failed"))
-
-                                    daily_failed_count.Increment(plan_name + "~" + day_str);
-
-                                prev_day_result = test_date_outcome.get(day_str);
-                            }
-
-                            confluence_page_table[TestProjectConfluenceRootKey].Rows.Add(TestProjectName.ToString().Replace(" Assessment", "").Trim(), plan_name, run_name.ToString().Replace(" Functional", "").Replace(" Regression", "").Trim(), testcaseid.Replace("C", "").ToInt(), auto_script_ref, testtitle, teststatus, tested_on, all_defects);
-
-                            // Tally the test results for later pie charting
-
-                            testrail_plan_type_status_count.Increment(plan_name.Replace(current_sprint_name, "").Trim() + "-" + teststatus);
+                            CopyFromTestPlan = TestProject.SelectSingleNode("*[starts-with(name(), 'TestPlan_')]/add[@NameSuffix='" + CopyFromNameSuffix + "']/..");
+                            CreateTestRailPlan(TestProjectId, plan_name, (long)sprint_milestone["id"], CopyFromTestPlan);
                         }
+
                     }
                 }
-            }
-
-            // for each confluence page to update
-
-            foreach (var each_confluence_page_table in confluence_page_table)
-            {
-                var confluence_space_key = each_confluence_page_table.Key.Split('-')[0];
-                var confluence_parent_page_key = each_confluence_page_table.Key.Split('-')[1];
-                var team_name = each_confluence_page_table.Key.Split('-')[2];
-
-                // Check if the sprint page exists in Confluence (under the provided root page provided in the config)
-
-                var confluence_child_page = (JObject)ConfluenceClient.SendGet(confluence_parent_page_key + "/child/page?limit=200");
-
-                var sprint_page_key = confluence_child_page.SelectToken("$..results[?(@.title == '" + team_name + " " + current_sprint_name + "')].id");
-
-                if (sprint_page_key == null)
-                {
-                    // Create the Sprint Page
-
-                    Log.WriteLine("Confluence Page \"" + team_name + " " + current_sprint_name + "\" creating ...");
-
-                    var confluence_create_page_json = new
-                    {
-                        type = "page",
-                        title = team_name + " " + current_sprint_name,
-                        @space = new
-                        {
-                            key = confluence_space_key
-                        },
-                        @ancestors = new[] {
-                            new {
-                                id = confluence_parent_page_key
-                            }
-                        }.ToList()
-                    };
-
-                    var result = (JObject)ConfluenceClient.SendPost("", confluence_create_page_json);
-                    sprint_page_key = result["id"];
-                }
-
-                confluence_child_page = (JObject)ConfluenceClient.SendGet(sprint_page_key + "/child/page?limit=200");
-
-                var sprint_qa_page_key = confluence_child_page.SelectToken("$..results[?(@.title == '" + team_name + " " + current_sprint_name + " QA Test Results')].id");
-
-                if (sprint_qa_page_key == null)
-                {
-                    // Create the Sprint QA Page
-
-                    Log.WriteLine("Confluence Page \"" + team_name + " " + current_sprint_name + " QA Test Results\" creating ...");
-
-                    var confluence_create_page_json = new
-                    {
-                        type = "page",
-                        title = team_name + " " + current_sprint_name + " QA Test Results",
-                        @space = new
-                        {
-                            key = confluence_space_key
-                        },
-                        @ancestors = new[] {
-                            new {
-                                id = sprint_page_key
-                            }
-                        }.ToList()
-                    };
-
-                    var result = (JObject)ConfluenceClient.SendPost("", confluence_create_page_json);
-                    sprint_qa_page_key = result["id"];
-                }
-
-                DataView results_table_view = new DataView(each_confluence_page_table.Value);
-                
-                // Table default sorting
-
-                results_table_view.Sort = "TestPlan, TestProject, TestRun";
-                var latest_regression_test_plan = "";
-                var table_rows = new TableRows();
-
-                foreach (DataRowView row in results_table_view)
-                {
-                    var emoji_name = "";
-                    var emoji_shortname = "";
-                    var emoji_id = "";
-                    var emoji_fallback = "";
-
-                    if (row["TestStatus"].Equals("Passed"))
-
-                        emoji_name = "tick";
-
-                    if (row["TestStatus"].Equals("Failed"))
-
-                        emoji_name = "cross";
-
-                    if (row["TestStatus"].Equals("Untested"))
-                    {
-                        emoji_name = "flag_off";
-                        emoji_shortname = ":flag_off:";
-                        emoji_id = "atlassian-flag_off";
-                        emoji_fallback = ":flag_off:";
-                    }
-
-                    var status = new Emoticon(emoji_name, emoji_shortname, emoji_id, emoji_fallback);
-
-                    var all_defects_cell = new TableCell();
-
-                    foreach (var defect in row["TestAllDefects"].ToString().Split(','))
-                    {
-                        if (all_defects_cell.GetCount() > 0)
-
-                            all_defects_cell.Add(", ");
-
-                        all_defects_cell.Add(new Hyperlink(AppConfig.Get("ConfluenceUrl") + "/browse/" + defect.Trim(), defect.Trim()));
-                    }
-
-                    var title = new TableCell();
-
-                    var variant_on_matches = Regex.Matches(row["TestTitle"].ToString().UrlEncode(5), "VARIANT on (\\w+)");
-                    var dependant_on_matches = Regex.Matches(row["TestTitle"].ToString().UrlEncode(5), "DEPENDANT on (\\w+)");
-
-                    if (variant_on_matches.Count == 0 && dependant_on_matches.Count == 0)
-
-                        title.Add(row["TestTitle"].ToString().UrlEncode(5));
-
-                    foreach (Match match in variant_on_matches)
-                    {
-                        var title_part = row["TestTitle"].ToString().UrlEncode(5).Split(new string[] { match.Value }, StringSplitOptions.None);
-                        title.Add(title_part[0]);
-                        title.Add("VARIANT on ");
-                        title.Add(new Hyperlink("#" + match.Value.Replace("VARIANT on ", ""), match.Value.Replace("VARIANT on ", "")));
-                        title.Add(title_part[1]);
-                    }
-
-                    foreach (Match match in dependant_on_matches)
-                    {
-                        var title_part = row["TestTitle"].ToString().UrlEncode(5).Split(new string[] { match.Value }, StringSplitOptions.None);
-                        title.Add(title_part[0]);
-                        title.Add("DEPENDANT on ");
-                        title.Add(new Hyperlink("#" + match.Value.Replace("DEPENDANT on ", ""), match.Value.Replace("DEPENDANT on ", "")));
-                        title.Add(title_part[1]);
-                    }
-
-                    table_rows.Add(
-                        new Hyperlink(AppConfig.Get("TestRailUrl") + "/index.php?/projects/overview/" + testrail_project_id.get(row["TestProject"].ToString()), row["TestProject"].ToString()),
-                        new Hyperlink(AppConfig.Get("TestRailUrl") + "/index.php?/plans/view/" + testrail_plan_id.get(row["TestPlan"].ToString()), row["TestPlan"].ToString()),
-                        new Hyperlink(AppConfig.Get("TestRailUrl") + "/index.php?/runs/view/" + testrail_run_id.get(row["TestRun"].ToString()), row["TestRun"].ToString()),
-                        new TableCell(
-                            new Anchor("C" + row["TestAutoID"]),
-                            "[",
-                            new Hyperlink(AppConfig.Get("TestRailUrl") + "/index.php?/cases/view/" + row["TestAutoID"], "C" + row["TestAutoID"]),
-                            "] " + row["TestAutoName"]
-                        ),
-                        title,
-                        status,
-                        row["TestTestedOn"],
-                        all_defects_cell
-                    );
-
-                    if (row["TestPlan"].ToString().StartsWith("Regression"))
-
-                        latest_regression_test_plan = row["TestPlan"].ToString();
-                }
-
-                var table = new Table("full-width").Add(
-                    new TableColumnGroup(70, 130, 130, 150, 280, 40, 70, 80)).Add(
-                    new TableHead("Client / Proj", "Test Type", "Test Level - Run", "[ID] Test Name", "Test Title", "Status", "Tested On", "All Defects")).Add(
-                    new TableBody(table_rows));
-
-                var confluence_page_storage_str = table.ToStringDisableFormatting();
-
-
-
-                // Prepend burndown chart
-
-                var burndown_chart_table_rows = new TableRows().AddHeader("Date", "Untested", "Failed");
-                int? max_not_passed = 0;
-
-                for (var day = current_sprint_start; day.Date <= current_sprint_end; day = day.AddDays(1))
-                {
-                    var day_str = day.ToString("ddd, dd/MM");
-
-                    if (daily_untested_count.get(latest_regression_test_plan + "~" + day_str) == null)
-
-                        daily_untested_count.put(latest_regression_test_plan + "~" + day_str, 0);
-
-                    if (daily_failed_count.get(latest_regression_test_plan + "~" + day_str) == null)
-
-                        daily_failed_count.put(latest_regression_test_plan + "~" + day_str, 0);
-
-                    if (day.Date > System.DateTime.Today)
-                    {
-                        day_str = "(TBC) " + day_str;
-                        daily_untested_count.put(latest_regression_test_plan + "~" + day_str, 0);
-                        daily_failed_count.put(latest_regression_test_plan + "~" + day_str, 0);
-                    }
-
-                    if (max_not_passed < (daily_untested_count.get(latest_regression_test_plan + "~" + day_str) + daily_failed_count.get(latest_regression_test_plan + "~" + day_str)))
-
-                        max_not_passed = daily_untested_count.get(latest_regression_test_plan + "~" + day_str) + daily_failed_count.get(latest_regression_test_plan + "~" + day_str);
-
-                    burndown_chart_table_rows.Add(
-                        day_str,
-                        daily_untested_count.get(latest_regression_test_plan + "~" + day_str).ToString(),
-                        daily_failed_count.get(latest_regression_test_plan + "~" + day_str).ToString()
-                    );
-                }
-
-                var burndown_chart = new Chart(
-                    new ChartBody(
-                        new TableBody(burndown_chart_table_rows)
-                    ),
-                    latest_regression_test_plan + " Burndown Chart",
-                    "bar",
-                    "true",
-                    500,
-                    300,
-                    "true",
-                    "",
-                    "up45",
-                    "vertical",
-                    Color.NameToHex("lightgray") + "," + Color.NameToHex("red"),
-                    "",
-                    max_not_passed
-                );
-
-
-                confluence_page_storage_str = burndown_chart.ToStringDisableFormatting() + confluence_page_storage_str;
-
-
-                // Prepend pie charts (to top of) confluence page
-
-                var section_width = "default";      // back to center
-                //var section_width = "wide";      // go wide
-                //var section_width = "full-width"; // go full wide
-                var testrail_plan_type_status_processed = new Dictionary<string, bool?>();
-                var pie_chart_columns = new SectionColumns();
-
-                foreach (var entry in testrail_plan_type_status_count)
-                {
-                    var key = entry.Key.Substring(0, entry.Key.LastIndexOf('-'));
-
-                    if (testrail_plan_type_status_processed.get(key) == null)
-                    {
-                        testrail_plan_type_status_processed.put(key, true);
-
-                        pie_chart_columns.Add("center", new Chart(
-                            new ChartBody(
-                                new TableBody(
-                                    new TableRows().AddHeader("Total", "Passed", "Failed", "Untested").Add(
-                                        "Total",
-                                        testrail_plan_type_status_count.get(key + "-Passed", 0).ToString(),
-                                        testrail_plan_type_status_count.get(key + "-Failed", 0).ToString(),
-                                        testrail_plan_type_status_count.get(key + "-Untested", 0).ToString()
-                                    )
-                                )
-                            ),
-                            key,
-                            "pie",
-                            "",
-                            200,
-                            200,
-                            "false",
-                            "",
-                            "",
-                            "",
-                            Color.NameToHex("seagreen") + "," + Color.NameToHex("red") + "," + Color.NameToHex("lightgray"),
-                            "%1%"
-                        ));
-                    }
-                }
-
-                var pie_chart_section = new Section("center", section_width, "true").Add(pie_chart_columns);
-
-                //                confluence_page_storage_str = "<h5 style=\"text-align: center;\">Status Charts by Test Type</h5>" + pie_chart_section.ToString(SaveOptions.DisableFormatting) + confluence_page_storage_str;
-                confluence_page_storage_str = want_to_know_more + "<h5 style=\"text-align: center;\">Status Charts by Test Type</h5>" + pie_chart_section.ToStringDisableFormatting() + confluence_page_storage_str;
-
-
-
-                // Update the confluence page
-
-                Log.WriteLine("Confluence Page \"" + sprint_qa_page_key + "\" getting the version ...");
-                var confluence_page = (JObject)ConfluenceClient.SendGet(sprint_qa_page_key + "?expand=version");
-                var confluence_page_version = (long)confluence_page["version"]["number"];
-                confluence_page_version++;
-
-                var confluence_json = new
-                {
-                    @version = new
-                    {
-                        number = confluence_page_version
-                    },
-                    type = "page",
-                    title = team_name + " " + current_sprint_name + " QA Test Results",
-                    @space = new
-                    {
-                        key = confluence_space_key
-                    },
-                    @ancestors = new[] {
-                        new {
-                            id = sprint_page_key
-                        }
-                    }.ToList(),
-                    @body = new
-                    {
-                        @storage = new
-                        {
-                            value = confluence_page_storage_str,
-                            representation = "storage"
-                        }
-                    }
-                };
-
-                Log.WriteLine("Confluence Page \"" + sprint_qa_page_key + "\" updating ...");
-                var pp = (JToken)ConfluenceClient.SendPut(sprint_qa_page_key.ToString(), confluence_json);
-                int i = 0;
-
             }
         }
+
+
+
+        private static void CreateTestRailPlan(string TestProjectId, string plan_name, long sprint_milestone_id, XmlNode TestPlan)
+        {
+
+
+            var tr_plan = new TestRailPlan3();
+            tr_plan.name = plan_name;
+            tr_plan.description = "";
+            tr_plan.milestone_id = sprint_milestone_id;
+
+            foreach (XmlNode TestSuite in TestPlan.SelectNodes("*[starts-with(name(), 'TestSuite_')]"))
+            {
+                var TestSuiteId = TestSuite.FirstChild.GetAttributeValue("Id");
+
+                var tr_plan_entry = new TestRailPlanEntry();
+                tr_plan_entry.suite_id = long.Parse(TestSuiteId);
+                //tr_plan.assignedto_id = 1;
+                tr_plan_entry.include_all = true;
+
+                foreach (XmlNode TestConfiguration in TestSuite.SelectSingleNode("TestConfiguration").SelectNodes("*"))
+                {
+                    var TestConfigurationId = TestConfiguration.GetAttributeValue("Id");
+                    tr_plan_entry.config_ids.Add(long.Parse(TestConfigurationId));
+                }
+
+                foreach (XmlNode TestRun in TestSuite.SelectNodes("*[starts-with(name(), 'TestRun_')]"))
+                {
+                    var tr_run = new TestRailRun2();
+                    tr_run.include_all = false;
+
+                    foreach (XmlNode TestCase in TestRun.SelectSingleNode("TestCase").SelectNodes("*"))
+                    {
+                        var TestCaseId = TestCase.GetAttributeValue("Id");
+                        tr_run.case_ids.Add(long.Parse(TestCaseId));
+                    }
+
+                    foreach (XmlNode TestConfiguration in TestRun.SelectSingleNode("TestConfiguration").SelectNodes("*"))
+                    {
+                        var TestConfigurationId = TestConfiguration.GetAttributeValue("Id");
+                        tr_run.config_ids.Add(long.Parse(TestConfigurationId));
+                    }
+
+                    tr_plan_entry.runs.Add(tr_run);
+                }
+
+                tr_plan.entries.Add(tr_plan_entry);
+            }
+
+            // create the test plan
+
+            Log.WriteLine("Posting new plan to endpoint \"add_plan/" + TestProjectId + "\" with data ... " + tr_plan);
+            var plan = (JObject)TestRailClient.SendPost("add_plan/" + TestProjectId, tr_plan);
+
+            var entries = plan["entries"];
+
+            // add the plan and run(s) into the associated execution group(s) in CoPilot
+
+            foreach (XmlNode TestSuite in TestPlan.SelectNodes("*[starts-with(name(), 'TestSuite_')]"))
+            {
+                var TestSuiteId = TestSuite.FirstChild.GetAttributeValue("Id");
+                int run_num = 1;
+
+                foreach (XmlNode TestRun in TestSuite.SelectNodes("*[starts-with(name(), 'TestRun_')]"))
+                {
+                    foreach (XmlNode ExecutionGroup in TestRun.SelectSingleNode("ExecutionGroup").SelectNodes("*"))
+                    {
+                        var ExecutionGroupId = ExecutionGroup.GetAttributeValue("Id");
+                        var ExecutionGroupSchemaName = ExecutionGroup.GetAttributeValue("SchemaName");
+
+                        var runs = entries.SelectToken("$[?(@.suite_id == " + TestSuiteId + ")].runs");
+
+                        Log.WriteLine("Connecting to CoPilot DB schema \"" + ExecutionGroupSchemaName + "\"");
+                        var dbConnect = new DBConnect(ExecutionGroupSchemaName);
+                        var sql = "update execution_group set external_plan_id = " + plan["id"] + ", external_plan_name = \"" + plan["name"] + "\", external_exe_rec_run_id = " + runs[run_num - 1]["id"] + ", external_exe_rec_run_name = \"" + runs[run_num - 1]["name"] + "\" where id = " + ExecutionGroupId + ";";
+                        Log.WriteLine("Executing SQL \"" + sql + "\"");
+                        var result_arr = dbConnect.Select<CoPilotExecutionGroup3>(sql);
+                    }
+
+                    run_num++;
+                }
+            }
+
+
+        }
+
+
+
     }
 }
